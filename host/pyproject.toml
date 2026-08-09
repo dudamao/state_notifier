@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "state-notifier-vfd"
+version = "2.0.0"
+description = "SN2 client and 40x7 rendering API for the State Notifier VFD"
+requires-python = ">=3.10"
+dependencies = ["pyserial>=3.5,<4", "Pillow>=10,<13"]
+
+[tool.setuptools]
+packages = ["vfd_display"]

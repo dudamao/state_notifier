@@ -1,0 +1,7 @@
+build/
+dependencies.lock
+__pycache__/
+*.pyc
+host/.venv/
+host/*.egg-info/
+.DS_Store
