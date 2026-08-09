@@ -12,7 +12,7 @@ void vfd_init(void);
 /**
  * Replace the complete 40x7 display frame.
  *
- * columns contains eight consecutive 5x7 cells. Bit 0 is the bottom pixel and
+ * columns contains eight consecutive 5x7 cells. Bit 0 is the top pixel and
  * bits 0..6 are significant. All eight CGRAM slots are updated before a single
  * display commit, so a frame becomes visible atomically.
  */

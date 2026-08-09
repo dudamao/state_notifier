@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
 
 from hook_ipc import HookReceiver
@@ -117,7 +118,7 @@ class SessionStatus:
 
 
 def summarize_task(message: Any, maximum: int = 64) -> str:
-    """Return a bounded, deterministic label from one root user message."""
+    """Return a bounded, display-safe ASCII label from one root user message."""
     if not isinstance(message, str) or maximum < 1:
         return ""
     lines = []
@@ -145,7 +146,31 @@ def summarize_task(message: Any, maximum: int = 64) -> str:
         return ""
     text = " ".join(lines)
     sentence = re.split(r"(?<=[。.！？!?；;])\s*", text, maxsplit=1)[0]
-    return sentence[:maximum]
+    replacements = str.maketrans({
+        "‘": "'", "’": "'", "“": '"', "”": '"',
+        "–": "-", "—": "-", "…": "...", "•": "*",
+        "→": ">", "←": "<",
+    })
+    normalized = unicodedata.normalize("NFKD", sentence.translate(replacements))
+    has_chinese = any(
+        "\u3400" <= character <= "\u4DBF" or
+        "\u4E00" <= character <= "\u9FFF" or
+        "\uF900" <= character <= "\uFAFF"
+        for character in normalized
+    )
+    ascii_text = "".join(
+        character if " " <= character <= "~" else " "
+        for character in normalized
+        if not unicodedata.combining(character)
+    )
+    ascii_text = re.sub(r"\s+", " ", ascii_text).strip().upper()
+    if has_chinese and re.search(r"[A-Z0-9]", ascii_text):
+        ascii_text = "CN " + ascii_text
+    elif has_chinese:
+        ascii_text = "CN TASK"
+    elif not ascii_text:
+        ascii_text = "TASK"
+    return ascii_text[:maximum]
 
 
 class StateAggregator:
@@ -814,11 +839,11 @@ class CodexDisplayRenderer:
         cycle = 0.75 + move_seconds + 0.75
         elapsed = (monotonic_now - self.started) % cycle
         if elapsed < 0.75:
-            offset = 0
-        elif elapsed < 0.75 + move_seconds:
-            offset = int((elapsed - 0.75) * self.scroll_speed)
-        else:
             offset = travel
+        elif elapsed < 0.75 + move_seconds:
+            offset = travel - int((elapsed - 0.75) * self.scroll_speed)
+        else:
+            offset = 0
         repeated = Bitmap7(self.bitmap.columns + (0,) * 15 + self.bitmap.columns)
         return repeated.window(offset, 35)
 
@@ -849,29 +874,34 @@ class CodexDisplayRenderer:
 
 
 class DemoDisplayRenderer:
+    FONT_CARDS = ("ABCDEFGH", "IJKLMNOP", "QRSTUVWX", "YZ012345", "6789!?+-")
+
     def __init__(self, renderer: CodexDisplayRenderer) -> None:
         self.renderer = renderer
 
     def render(self, elapsed: float, wall_now: float) -> Frame40x7:
-        phase = elapsed % 36.0
-        if phase < 5:
+        phase = elapsed % 50.0
+        if phase < 4:
             tick = int(elapsed * 30)
             columns = tuple(0x55 if (index + tick) % 2 == 0 else 0x2A
                             for index in range(40))
             return Frame40x7(columns)
-        if phase < 11:
+        if phase < 19:
+            card = self.FONT_CARDS[min(4, int((phase - 4) / 3))]
+            return Frame40x7(self.renderer.text_renderer.render(card).columns)
+        if phase < 25:
             return self.renderer.render(("RUNNING", "demo", "SN2 30 FPS ANIMATION"),
                                         (None, None), wall_now, elapsed)
-        if phase < 16:
+        if phase < 30:
             return self.renderer.render(("APPROVAL", "demo", "DEMO TASK"),
                                         (None, None), wall_now, elapsed)
-        if phase < 21:
+        if phase < 35:
             return self.renderer.render(("INPUT", "demo", "DEMO TASK"),
                                         (None, None), wall_now, elapsed)
-        if phase < 26:
+        if phase < 40:
             return self.renderer.render(("DONE", "demo", "DEMO TASK"),
                                         (None, None), wall_now, elapsed)
-        if phase < 31:
+        if phase < 45:
             return self.renderer.render(("ERROR", "demo", "DEMO TASK"),
                                         (None, None), wall_now, elapsed)
         limits = (LimitWindow(10080, 91), LimitWindow(300, 82))
@@ -992,7 +1022,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--demo", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--fps", type=float, default=30.0,
                         help="render rate from 1 to 60 FPS (default: 30)")
-    parser.add_argument("--font", help="TrueType/OpenType font used for seven-pixel text")
+    parser.add_argument("--font", help="deprecated; the built-in ASCII 5x7 font is always used")
     parser.add_argument("--codex-home", default=str(default_codex_home()),
                         help="Codex state root (default: CODEX_HOME or ~/.codex)")
     parser.add_argument("--codex-binary",

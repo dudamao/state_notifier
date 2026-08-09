@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import string
 import struct
 import sys
 import tempfile
@@ -181,7 +182,7 @@ class AggregatorTests(unittest.TestCase):
         state.user_message("old", "Old task.", 10)
         state.task_started("new", 20)
         state.user_message("new", "New task.", 20)
-        self.assertEqual(state.selected(21), ("RUNNING", "new", "New task."))
+        self.assertEqual(state.selected(21), ("RUNNING", "new", "NEW TASK."))
         state.hook({"event": "APPROVAL", "session_id": "old"}, 22)
         self.assertEqual(state.selected(22)[1], "old")
 
@@ -193,8 +194,13 @@ class SummaryTests(unittest.TestCase):
 
 **Please** update [the module](https://example.test/private). Then ignore this.
 """
-        self.assertEqual(bridge.summarize_task(message), "Please update the module.")
+        self.assertEqual(bridge.summarize_task(message), "PLEASE UPDATE THE MODULE.")
         self.assertEqual(len(bridge.summarize_task("x" * 100)), 64)
+
+    def test_summary_keeps_ascii_from_chinese_and_has_clear_fallback(self) -> None:
+        self.assertEqual(bridge.summarize_task("请修复 USB 30fps 通讯。后文"), "CN USB 30FPS")
+        self.assertEqual(bridge.summarize_task("请优化中文字符显示。后文"), "CN TASK")
+        self.assertEqual(bridge.summarize_task("Café status — ready!"), "CAFE STATUS - READY!")
 
 
 class LimitTests(unittest.TestCase):
@@ -244,7 +250,7 @@ class TailerTests(unittest.TestCase):
         self.process(tailer, state, {"type": "event_msg", "payload": {
             "type": "user_message", "message": "Latest task! More private text"
         }}, 3)
-        self.assertEqual(aggregator.sessions["root"].summary, "Latest task!")
+        self.assertEqual(aggregator.sessions["root"].summary, "LATEST TASK!")
 
     def test_subagent_is_ignored(self) -> None:
         aggregator = bridge.StateAggregator()
@@ -446,21 +452,32 @@ class FrameTests(unittest.TestCase):
         rows[0][0] = True
         rows[6][39] = True
         frame = Frame40x7.from_rows(rows)
-        self.assertEqual(frame.columns[0], 0x40)
-        self.assertEqual(frame.columns[39], 0x01)
-        self.assertEqual(frame.translated(1, 0).columns[1], 0x40)
-        self.assertEqual(frame.translated(0, 1).columns[0], 0x20)
-        self.assertEqual(frame.crop(0, 0, 1, 1).columns[0], 0x40)
-        self.assertEqual(frame.overlay(Frame40x7((1,) + (0,) * 39)).columns[0], 0x41)
+        self.assertEqual(frame.columns[0], 0x01)
+        self.assertEqual(frame.columns[39], 0x40)
+        self.assertEqual(frame.translated(1, 0).columns[1], 0x01)
+        self.assertEqual(frame.translated(0, 1).columns[0], 0x02)
+        self.assertEqual(frame.crop(0, 0, 1, 1).columns[0], 0x01)
+        self.assertEqual(frame.overlay(Frame40x7((0x40,) + (0,) * 39)).columns[0], 0x41)
 
     @unittest.skipIf(vfd_frame.Image is None, "Pillow is not installed in this interpreter")
-    def test_image_and_unicode_rendering(self) -> None:
+    def test_image_rendering(self) -> None:
         image = vfd_frame.Image.new("L", (40, 7), 0)
         image.putpixel((2, 3), 255)
         frame = Frame40x7.from_image(image)
         self.assertNotEqual(frame.columns[2], 0)
+
+    def test_fixed_ascii_font_is_exactly_five_columns_per_character(self) -> None:
         rendered = vfd_frame.TextRenderer().render("A中▶")
-        self.assertGreater(rendered.width, 0)
+        self.assertEqual(rendered.width, 15)
+        self.assertEqual(rendered.columns[:5], (0x7E, 0x11, 0x11, 0x11, 0x7E))
+        self.assertEqual(rendered.columns[5:10], rendered.columns[10:15])
+        self.assertEqual(vfd_frame.TextRenderer().render("a").columns, rendered.columns[:5])
+        self.assertEqual(
+            vfd_frame.TextRenderer().render("1").columns,
+            (0x00, 0x42, 0x7F, 0x40, 0x00),
+        )
+        expected = set(string.ascii_uppercase + string.digits + string.punctuation + " ")
+        self.assertEqual(set(vfd_frame.FONT5X7), expected)
 
 
 class RendererTests(unittest.TestCase):
@@ -480,6 +497,32 @@ class RendererTests(unittest.TestCase):
         self.assertEqual(on.columns[5:], off.columns[5:])
         idle = renderer.render(("IDLE", None, ""), (None, None), 0, 1)
         self.assertEqual(idle.columns[:5], (0,) * 5)
+
+    def test_demo_contains_exact_eight_character_font_cards(self) -> None:
+        text_renderer = vfd_frame.TextRenderer()
+        demo = bridge.DemoDisplayRenderer(bridge.CodexDisplayRenderer(text_renderer))
+        self.assertEqual(
+            demo.render(4.0, 0).columns,
+            text_renderer.render("ABCDEFGH").columns,
+        )
+        self.assertEqual(
+            demo.render(16.1, 0).columns,
+            text_renderer.render("6789!?+-").columns,
+        )
+
+    def test_long_text_scrolls_from_first_toward_last_cell(self) -> None:
+        class LongTextRenderer:
+            font_path = "test"
+
+            @staticmethod
+            def render(_text):
+                return Bitmap7(range(1, 41))
+
+        renderer = bridge.CodexDisplayRenderer(LongTextRenderer())
+        start = renderer._window("long", 0.0)
+        moved = renderer._window("long", 1.0)
+        self.assertEqual(start.columns[:4], (1, 2, 3, 4))
+        self.assertEqual(moved.columns[:4], (0, 0, 1, 2))
 
 
 class RateLimitWorkerTests(unittest.TestCase):

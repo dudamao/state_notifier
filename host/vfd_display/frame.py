@@ -1,19 +1,17 @@
-"""40x7 frame primitives and best-effort seven-pixel text rendering."""
+"""40x7 frame primitives and exact fixed-width 5x7 text rendering."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
-from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence, Tuple
 
 try:
-    from PIL import Image, ImageDraw, ImageFont, ImageOps
-except ImportError:  # pragma: no cover - reported when rendering is requested
+    from PIL import Image, ImageOps
+except ImportError:  # pragma: no cover - reported when image rendering is requested
     Image = None
-    ImageDraw = None
-    ImageFont = None
     ImageOps = None
+
+from .font5x7 import FONT5X7
 
 
 WIDTH = 40
@@ -72,7 +70,7 @@ class Frame40x7:
             value = 0
             for y in range(HEIGHT):
                 if bool(rows[y][x]):
-                    value |= 1 << (HEIGHT - 1 - y)
+                    value |= 1 << y
             columns.append(value)
         return cls(columns)
 
@@ -107,7 +105,8 @@ class Frame40x7:
             target = x + dx
             if not 0 <= target < WIDTH:
                 continue
-            output[target] = column >> dy if dy >= 0 else (column << -dy) & 0x7F
+            output[target] = ((column << dy) & 0x7F if dy >= 0 else
+                              column >> -dy)
         return Frame40x7(output)
 
     def crop(self, x: int, y: int, width: int, height: int) -> "Frame40x7":
@@ -120,8 +119,8 @@ class Frame40x7:
                 for target_y in range(min(height, HEIGHT)):
                     source_y = y + target_y
                     if (0 <= source_y < HEIGHT and
-                            self.columns[source] & (1 << (HEIGHT - 1 - source_y))):
-                        value |= 1 << (HEIGHT - 1 - target_y)
+                            self.columns[source] & (1 << source_y)):
+                        value |= 1 << target_y
                 output[target] = value
         return Frame40x7(output)
 
@@ -139,52 +138,21 @@ class Frame40x7:
 
 
 class TextRenderer:
-    """Rasterize Unicode with an optional TrueType/OpenType font."""
+    """Render uppercase ASCII using exact, pre-defined 5x7 glyphs.
 
-    FONT_CANDIDATES = (
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
-        r"C:\Windows\Fonts\seguisym.ttf",
-        r"C:\Windows\Fonts\arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    )
+    ``font_path``, ``font_size`` and ``threshold`` remain accepted for source
+    compatibility with SN2 2.0 callers, but bitmap text never loads or scales a
+    system font. Lowercase ASCII is converted to uppercase and every unsupported
+    character is rendered as ``?``.
+    """
 
     def __init__(self, font_path: Optional[str] = None, font_size: int = 9,
                  threshold: int = 96) -> None:
-        if ImageFont is None:
-            raise RuntimeError("Pillow is required for text rendering")
-        self.font_path = font_path or self._discover_font()
-        self.font_size = font_size
-        self.threshold = threshold
-        self.font = (ImageFont.truetype(self.font_path, font_size)
-                     if self.font_path else ImageFont.load_default())
-
-    @classmethod
-    def _discover_font(cls) -> Optional[str]:
-        configured = os.environ.get("VFD_FONT")
-        if configured and Path(configured).is_file():
-            return configured
-        return next((path for path in cls.FONT_CANDIDATES if Path(path).is_file()), None)
+        del font_path, font_size, threshold
+        self.font_path = "builtin:ascii-5x7"
 
     def render(self, text: str) -> Bitmap7:
-        text = text or " "
-        probe = Image.new("L", (1, 1), 0)
-        draw = ImageDraw.Draw(probe)
-        left, top, right, bottom = draw.textbbox((0, 0), text, font=self.font)
-        width = max(1, right - left)
-        height = max(1, bottom - top)
-        source = Image.new("L", (width, height), 0)
-        ImageDraw.Draw(source).text((-left, -top), text, font=self.font, fill=255)
-        if source.height > HEIGHT:
-            target_width = max(1, round(source.width * HEIGHT / source.height))
-            source = source.resize((target_width, HEIGHT), Image.Resampling.LANCZOS)
-        canvas = Image.new("L", (source.width, HEIGHT), 0)
-        canvas.paste(source, (0, (HEIGHT - source.height) // 2))
         columns = []
-        for x in range(canvas.width):
-            value = 0
-            for y in range(HEIGHT):
-                if canvas.getpixel((x, y)) >= self.threshold:
-                    value |= 1 << (HEIGHT - 1 - y)
-            columns.append(value)
+        for character in (text or " ").upper():
+            columns.extend(FONT5X7.get(character, FONT5X7["?"]))
         return Bitmap7(columns)

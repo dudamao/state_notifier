@@ -31,11 +31,11 @@ COM 口或 USB 序列号。
 .\host\run_bridge.ps1 -Mode demo -Fps 30
 .\host\run_bridge.ps1 -Port COM3 -Mode codex
 .\host\run_bridge.ps1 -SerialNumber "D0:CF:13:F0:B7:4C"
-.\host\run_bridge.ps1 -Font "C:\Windows\Fonts\msyh.ttc"
 ```
 
 默认模式是 `codex`，默认刷新率是 30 FPS。`-Demo` 作为旧启动方式的兼容别名
-仍等价于 `-Mode demo`。
+仍等价于 `-Mode demo`。文本使用内置固定 5×7 ASCII 字体，不依赖 Windows 字体。
+中文任务会以 `CN ` 开头并保留英文、数字和符号；纯中文摘要显示 `CN TASK`。
 
 Windows App、CLI 和 IDE 默认共享 `%USERPROFILE%\.codex`。WSL 默认使用独立的
 Linux `~/.codex`；若需要让 Windows 上位机看到 WSL rollout，可设置：

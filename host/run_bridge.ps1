@@ -6,7 +6,6 @@ param(
     [string] $Mode = "codex",
     [switch] $Demo,
     [double] $Fps = 30,
-    [string] $Font,
     [string] $CodexHome,
     [string] $CodexBinary
 )
@@ -22,7 +21,6 @@ if ($Port) { $BridgeArgs += @("--port", $Port) }
 if ($SerialNumber) { $BridgeArgs += @("--serial-number", $SerialNumber) }
 if ($Demo) { $Mode = "demo" }
 $BridgeArgs += @("--mode", $Mode, "--fps", $Fps)
-if ($Font) { $BridgeArgs += @("--font", $Font) }
 if ($CodexHome) { $BridgeArgs += @("--codex-home", $CodexHome) }
 if ($CodexBinary) { $BridgeArgs += @("--codex-binary", $CodexBinary) }
 if ($PSBoundParameters.ContainsKey("Verbose")) { $BridgeArgs += "--verbose" }
