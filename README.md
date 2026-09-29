@@ -1,8 +1,8 @@
 # ESP32-C5 40×7 VFD 显示模组
 
 本项目将 `8-MD-06INKM` VFD 作为通用 USB 显示模组使用。ESP32-C5 固件只负责
-SN2 USB 通讯、协议反馈和 VFD 点阵写入；文字、动画、Codex 状态、额度与滚动
-全部由 macOS/Windows 上位机生成。
+SN2 USB 通讯、协议反馈和 VFD 点阵写入；时钟、文字与动画全部由 macOS/Windows
+上位机生成。
 
 SN2 与旧 SN1 状态协议不兼容。升级上位机后必须重新烧录本目录中的固件。
 
@@ -65,11 +65,9 @@ macOS：
 
 ```sh
 ./host/setup_macos.sh
-/usr/bin/python3 host/install_hooks.py install
 ```
 
-Windows 见 `WINDOWS.md`。安装 hooks 后在 Codex `/hooks` 中审阅并信任
-`PreToolUse(request_user_input)`、`PermissionRequest` 和 `Stop` 三项命令。
+Windows 见 `WINDOWS.md`。
 
 ## Python API
 
@@ -101,31 +99,26 @@ with VfdClient() as display:
 `fps` 范围为 1–60。ACK 在后台接收，不会逐帧阻塞；`display.stats` 可读取已发送、
 已确认、丢弃、NACK、重连和设备累计提交帧数。
 
-## Codex 与演示模式
+## 时钟与自检模式
 
-无参数或显式 Codex 模式：
+默认（无参数）显示上位机系统时钟：
 
 ```sh
 ./host/run_bridge.sh
-./host/run_bridge.sh --mode codex --fps 30 --verbose
+./host/run_bridge.sh --mode clock --fps 30 --verbose
 ```
 
-演示模式：
+`HH:MM:SS` 恰好 8 个字符，内置 5×7 字体每个字符严格占 5 列，正好铺满 40 列，
+不滚动也不裁切。时钟每秒变化一次，上位机只在点阵内容改变时发送 FRAME，其余
+时间以每秒一次的 PING 维持连接，固件因此不会触发 2 秒清屏。
+
+自检模式按 25 秒循环依次显示移动棋盘格、5 张全字符卡片（`ABCDEFGH`、
+`IJKLMNOP`、`QRSTUVWX`、`YZ012345`、`6789!?+-`）和实时时钟，用于烧录后的
+硬件目视自检：
 
 ```sh
 ./host/run_bridge.sh --mode demo --fps 30
 ```
-
-Codex 模式保留 hooks、根 rollout 状态、额度读取、JSONL 回退和 USB 自动重连。
-第一位显示状态图标：运行 `▶`、批准/输入 `⏸`、完成 `⏹`、错误 `×`。只有需要
-注意的图标以 500 ms 闪烁；剩余 35×7 像素滚动最近一条根任务用户消息的首句。
-摘要跳过文件声明和代码块、清除 Markdown/URL、转为大写 ASCII，最多 64 字符，
-且不会读取工具参数、命令输出、助手回复或子代理内容。中文摘要会保留其中已有的
-英文、数字和符号并添加 `CN ` 前缀；没有可用 ASCII 信息时显示刚好 7 字符的
-`CN TASK`，不再尝试显示汉字。
-
-多任务按批准、输入、错误、完成、运行的优先级选择，同级显示最近活动任务。
-完成/错误保持 10 秒；空闲时两个额度窗口每 3 秒轮播，无有效额度显示 `LIMIT--`。
 
 ## 测试
 
@@ -143,5 +136,5 @@ host/.venv/bin/python host/benchmark_device.py --port /dev/cu.usbmodem21201
 ```
 
 硬件性能验收为连续 10 分钟发送 30 FPS：平均提交至少 29 FPS，任意 1 秒窗口
-至少 24 FPS，CRC/解析错误为零。图标、棋盘格、滚动、亮度和断线约 2 秒清屏仍需
-实机目视确认。
+至少 24 FPS，CRC/解析错误为零。时钟、棋盘格、自检字符卡、亮度和断线约 2 秒
+清屏仍需实机目视确认。

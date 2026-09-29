@@ -28,4 +28,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "Windows host environment is ready: $VenvPython"
-Write-Host "Next: .\host\install_hooks.ps1 install"
+Write-Host "Next: .\host\run_bridge.ps1"
