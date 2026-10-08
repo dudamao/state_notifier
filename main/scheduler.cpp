@@ -37,6 +37,10 @@ void arm_next_second()
     if (delay_us < 2000) {
         delay_us += 1000000;
     }
+    // notify() can wake the loop while the previous tick is still pending;
+    // esp_timer_start_once rejects an armed timer, so stop it first and
+    // re-arm against the (possibly SNTP-stepped) wall clock.
+    esp_timer_stop(s_timer);
     esp_timer_start_once(s_timer, delay_us);
 }
 
@@ -99,6 +103,9 @@ void run()
             s_has_last = true;
         }
         s_last_generation = display::generation();
+
+        // The tick timer is one-shot: arm it again for the next second.
+        arm_next_second();
     }
 }
 
