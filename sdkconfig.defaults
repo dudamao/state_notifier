@@ -3,3 +3,15 @@
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
 CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
 CONFIG_USJ_ENABLE_USB_SERIAL_JTAG=y
+
+# WiFi + lwIP + wpa_supplicant no longer fit the 1 MB factory partition of the
+# default single-app table. The 1500K table keeps headroom on the 2 MB flash
+# without moving the nvs/phy_init/factory offsets.
+CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+
+# This firmware only joins a hotspot, it never hosts one.
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# Start the first SNTP request immediately instead of waiting up to 5 s at
+# random (CONFIG_LWIP_SNTP_MAXIMUM_STARTUP_DELAY).
+CONFIG_LWIP_SNTP_STARTUP_DELAY=n

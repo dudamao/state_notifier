@@ -1,5 +1,9 @@
 build/
+build_usb/
+build_debug/
 dependencies.lock
+sdkconfig.usb
+sdkconfig.debug
 __pycache__/
 *.pyc
 host/.venv/

@@ -1,166 +1,63 @@
-#include <cstddef>
-#include <cstdint>
-#include <cstring>
-
-#include "driver/usb_serial_jtag.h"
+#include "clock_source.h"
+#include "display.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "net_session.h"
+#include "nvs_flash.h"
+#include "scheduler.h"
 #include "sn2_protocol.h"
-#include "vfd_display.h"
+#include "time_sync.h"
+#if CONFIG_STATE_NOTIFIER_USB_DISPLAY
+#include "usb_display.h"
+#endif
+
+static_assert(app::kColumnCount == sn2::kFrameBytes,
+              "an SN2 frame carries one column per display column");
 
 namespace {
 
-constexpr uint64_t kHostTimeoutMs = 2000;
-constexpr uint8_t kCapabilities[] = {
-    8,   // display cells
-    5,   // cell width
-    7,   // display height
-    40,  // logical width
-    60,  // advertised maximum FPS
-    1,   // feature bit 0: brightness control
-};
-
-const char *const kTag = "vfd_module";
-sn2::StreamDecoder s_decoder;
-uint32_t s_applied_frames = 0;
-uint64_t s_last_valid_ms = 0;
-bool s_host_seen = false;
-
-void write_u32(uint8_t *target, uint32_t value)
-{
-    target[0] = static_cast<uint8_t>(value & 0xFF);
-    target[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
-    target[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
-    target[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
-}
-
-void send_packet(sn2::MessageType type, uint16_t sequence,
-                 const uint8_t *payload = nullptr, uint16_t length = 0)
-{
-    uint8_t encoded[sn2::kMaxEncoded + 1] = {};
-    const size_t encoded_length = sn2::encode_packet(
-        type, sequence, payload, length, encoded, sizeof(encoded));
-    if (encoded_length != 0) {
-        usb_serial_jtag_write_bytes(encoded, encoded_length, pdMS_TO_TICKS(20));
-    }
-}
-
-void send_result(sn2::MessageType type, uint16_t sequence,
-                 sn2::ErrorCode error = sn2::ErrorCode::kNone)
-{
-    uint8_t payload[5] = {static_cast<uint8_t>(error)};
-    write_u32(payload + 1, s_applied_frames);
-    send_packet(type, sequence, payload, sizeof(payload));
-}
-
-bool handle_packet(const sn2::Packet &packet)
-{
-    switch (packet.type) {
-        case sn2::MessageType::kHello:
-            if (packet.length != 0) {
-                send_result(sn2::MessageType::kNack, packet.sequence,
-                            sn2::ErrorCode::kLength);
-                return false;
-            }
-            send_packet(sn2::MessageType::kCapabilities, packet.sequence,
-                        kCapabilities, sizeof(kCapabilities));
-            return true;
-
-        case sn2::MessageType::kFrame:
-            if (packet.length != sn2::kFrameBytes) {
-                send_result(sn2::MessageType::kNack, packet.sequence,
-                            sn2::ErrorCode::kLength);
-                return false;
-            }
-            for (size_t index = 0; index < packet.length; ++index) {
-                if ((packet.payload[index] & 0x80) != 0) {
-                    send_result(sn2::MessageType::kNack, packet.sequence,
-                                sn2::ErrorCode::kPayload);
-                    return false;
-                }
-            }
-            vfd_write_frame(packet.payload);
-            ++s_applied_frames;
-            send_result(sn2::MessageType::kAck, packet.sequence);
-            return true;
-
-        case sn2::MessageType::kClear:
-            if (packet.length != 0) {
-                send_result(sn2::MessageType::kNack, packet.sequence,
-                            sn2::ErrorCode::kLength);
-                return false;
-            }
-            vfd_clear();
-            send_result(sn2::MessageType::kAck, packet.sequence);
-            return true;
-
-        case sn2::MessageType::kSetBrightness:
-            if (packet.length != 1) {
-                send_result(sn2::MessageType::kNack, packet.sequence,
-                            sn2::ErrorCode::kLength);
-                return false;
-            }
-            vfd_set_brightness(packet.payload[0]);
-            send_result(sn2::MessageType::kAck, packet.sequence);
-            return true;
-
-        case sn2::MessageType::kPing: {
-            if (packet.length != 0) {
-                send_result(sn2::MessageType::kNack, packet.sequence,
-                            sn2::ErrorCode::kLength);
-                return false;
-            }
-            uint8_t count[4] = {};
-            write_u32(count, s_applied_frames);
-            send_packet(sn2::MessageType::kPong, packet.sequence, count, sizeof(count));
-            return true;
-        }
-
-        default:
-            send_result(sn2::MessageType::kNack, packet.sequence,
-                        sn2::ErrorCode::kType);
-            return false;
-    }
-}
-
-void service_watchdog(uint64_t now_ms)
-{
-    if (s_host_seen && now_ms - s_last_valid_ms > kHostTimeoutMs) {
-        vfd_clear();
-        s_host_seen = false;
-        ESP_LOGW(kTag, "host timeout; display cleared");
-    }
-}
+const char *const kTag = "app";
 
 }  // namespace
 
 extern "C" void app_main(void)
 {
-    vfd_init();
-
-    usb_serial_jtag_driver_config_t usb_config =
-        USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&usb_config));
-    ESP_LOGI(kTag, "SN2 VFD module ready");
-
-    uint8_t input[128] = {};
-    while (true) {
-        const int received = usb_serial_jtag_read_bytes(
-            input, sizeof(input), pdMS_TO_TICKS(10));
-        for (int index = 0; index < received; ++index) {
-            sn2::Packet packet = {};
-            const sn2::DecodeResult result = s_decoder.push(input[index], &packet);
-            if (result.packet_ready) {
-                if (handle_packet(packet)) {
-                    s_last_valid_ms = static_cast<uint64_t>(esp_timer_get_time()) / 1000;
-                    s_host_seen = true;
-                }
-            } else if (result.error && result.has_sequence) {
-                send_result(sn2::MessageType::kNack, result.sequence,
-                            result.error_code);
-            }
-        }
-        service_watchdog(static_cast<uint64_t>(esp_timer_get_time()) / 1000);
+    // NVS holds the WiFi calibration data. Without it the clock can still
+    // show the placeholder frame, so a failure is reported but not fatal.
+    esp_err_t nvs = nvs_flash_init();
+    if (nvs == ESP_ERR_NVS_NO_FREE_PAGES || nvs == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs = nvs_flash_init();
     }
+    if (nvs != ESP_OK) {
+        ESP_LOGE(kTag, "nvs_flash_init: %s; wifi unavailable", esp_err_to_name(nvs));
+    }
+
+    app::display::init();
+
+    static app::ClockSource clock;
+    ESP_ERROR_CHECK(clock.start());
+    app::scheduler::init(&clock);
+
+    // The timezone must be in effect before anything calls localtime_r.
+    app::time_sync::apply_timezone(CONFIG_STATE_NOTIFIER_TIMEZONE);
+
+    if (nvs == ESP_OK) {
+        if (app::net_session::init() == ESP_OK) {
+            ESP_ERROR_CHECK(app::time_sync::start());
+        } else {
+            ESP_LOGE(kTag, "network stack unavailable; clock stays unsynced");
+        }
+    }
+
+#if CONFIG_STATE_NOTIFIER_USB_DISPLAY
+    ESP_ERROR_CHECK(app::usb_display::start());
+#endif
+
+    ESP_LOGI(kTag, "main task stack high water mark: %u bytes",
+             static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+
+    // Runs the 1 Hz render loop; app_main never returns from here.
+    app::scheduler::run();
 }

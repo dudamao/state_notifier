@@ -1,10 +1,13 @@
 # ESP32-C5 40×7 VFD 显示模组
 
-本项目将 `8-MD-06INKM` VFD 作为通用 USB 显示模组使用。ESP32-C5 固件只负责
-SN2 USB 通讯、协议反馈和 VFD 点阵写入；时钟、文字与动画全部由 macOS/Windows
-上位机生成。
+本项目把 `8-MD-06INKM` VFD 做成一台上电自动对时的桌面时钟：ESP32-C5 固件启动
+后连接指定热点、通过 SNTP 获取时间，随后关闭 WiFi 射频，只靠芯片内部硬件定时
+器走时，并在本地用内置 5×7 点阵字体渲染 `HH:MM:SS`。USB 仅作供电。
 
-SN2 与旧 SN1 状态协议不兼容。升级上位机后必须重新烧录本目录中的固件。
+固件同时保留 SN2 USB 直连显示端点（由上位机推送任意 40×7 点阵，时钟、文字与
+动画全部由 macOS/Windows 上位机生成），但默认关闭，需要用
+`sdkconfig.usb.defaults` 构建变体。SN2 与旧 SN1 状态协议不兼容，升级上位机后
+必须重新烧录 USB 变体固件。
 
 ## 硬件与点阵
 
@@ -21,6 +24,34 @@ SN2 与旧 SN1 状态协议不兼容。升级上位机后必须重新烧录本�
 
 显示逻辑尺寸是 40×7：8 个物理字符位，每位 5×7。每列用一个字节表示，bit 0
 是最上方像素，bit 6 是最下方像素。物理字符位之间的间隙不能由软件消除。
+
+## WiFi 对时与本地走时（默认固件）
+
+上电后的 UART0 日志时间线：
+
+```text
+nvs ok -> display ready -> scheduler ready -> network stack ready ->
+joining '<SSID>' -> got ip 192.168.x.x -> system time set: 2026-.. ->
+wifi released; clock runs on the internal timer
+```
+
+- 连接参数在 `idf.py menuconfig` → "State notifier" 中配置：SSID/密码、连接与
+  SNTP 超时、SNTP 服务器（默认 `ntp.aliyun.com`）、时区（POSIX TZ 字符串，
+  默认 `CST-8` 即 UTC+8）、重试退避上下限、亮度。
+- 同步成功前显示 `--:--:--`；热点不在或同步失败时按 5/10/20/40/60 秒退避持续
+  重试，中途开启热点无需重启，成功即上屏。
+- 同步成功后立即关闭 WiFi 射频（`esp_wifi_deinit` 关闭调制解调器电源域），
+  之后没有任何网络访问：系统时间由内部硬件定时器（systimer/RTC）维持，
+  1 Hz 硬件节拍按整秒边界刷新显示。
+- 设备无备用电池，掉电重启后时间丢失、需重新同步；单次同步后晶振漂移约
+  1–3 s/天。若在意精度，可通过扩展接口加默认关闭的定期重同步。
+- 扩展接口（为"通过互联网显示其他信息"预留）：`main/content_source.h` 是内容
+  源抽象（`render()` 产出 40×7 帧，时钟是内置实现）；`main/net_session.h` 是
+  可复用的网络会话（`acquire()` 拉起 WiFi 并等 DHCP，`release()` 关闭射频）。
+  新增一个联网内容源 = 实现 `ContentSource`，在它的 worker 任务里
+  `net_session::acquire()` → 抓取数据 → `release()` → 组帧缓存 →
+  `scheduler::notify()`；多个内容源轮换写一个持有子源的 `ContentSource` 即可，
+  `scheduler` 无需改动。
 
 ## SN2 协议
 
@@ -50,14 +81,25 @@ SN2 与旧 SN1 状态协议不兼容。升级上位机后必须重新烧录本�
 ## 构建与烧录
 
 ```sh
-cd /Users/duyikang/master/02_dev/state_notifier
-source /Users/duyikang/.espressif/tools/activate_idf_v6.0.2.sh
+# 默认构建：WiFi 时钟固件（USB 仅供电）
 idf.py build
-idf.py -p /dev/cu.usbmodem21201 flash
+idf.py -p <PORT> flash
+
+# USB 直连显示变体（配合 host 上位机与 pytest）
+idf.py -B build_usb -DSDKCONFIG="sdkconfig.usb" \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb.defaults" build
+idf.py -B build_usb -p <PORT> flash
 ```
 
-USB Serial/JTAG 被 SN2 独占，烧录、monitor、硬件测试和上位机不能同时打开同一
-端口。应用日志仍输出到 UART0。
+macOS 构建前先激活 IDF（`source .../activate_idf_v6.0.2.sh`），Windows 见
+`WINDOWS.md`。
+
+WiFi + lwIP + wpa_supplicant 无法装进默认的 1 MB factory 分区，
+`sdkconfig.defaults` 已切换为 `CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE`
+（1500 KB 分区，当前固件约 883 KB）。分区偏移不变，无需 erase-flash。
+
+USB 变体下 USB Serial/JTAG 被 SN2 独占，烧录、monitor、硬件测试和上位机不能
+同时打开同一端口。两种固件的应用日志都输出到 UART0；默认固件不安装 USB 驱动。
 
 ## 安装上位机
 
@@ -99,9 +141,9 @@ with VfdClient() as display:
 `fps` 范围为 1–60。ACK 在后台接收，不会逐帧阻塞；`display.stats` 可读取已发送、
 已确认、丢弃、NACK、重连和设备累计提交帧数。
 
-## 时钟与自检模式
+## 上位机时钟与自检模式（仅 USB 变体）
 
-默认（无参数）显示上位机系统时钟：
+以下命令需要 USB 直连显示变体固件。默认（无参数）显示上位机系统时钟：
 
 ```sh
 ./host/run_bridge.sh
@@ -110,7 +152,8 @@ with VfdClient() as display:
 
 `HH:MM:SS` 恰好 8 个字符，内置 5×7 字体每个字符严格占 5 列，正好铺满 40 列，
 不滚动也不裁切。时钟每秒变化一次，上位机只在点阵内容改变时发送 FRAME，其余
-时间以每秒一次的 PING 维持连接，固件因此不会触发 2 秒清屏。
+时间以每秒一次的 PING 维持连接。上位机活跃期间本机时钟暂停上屏；停止上位机
+约 2 秒后固件自动恢复显示本机时钟（不再清屏）。
 
 自检模式按 25 秒循环依次显示移动棋盘格、5 张全字符卡片（`ABCDEFGH`、
 `IJKLMNOP`、`QRSTUVWX`、`YZ012345`、`6789!?+-`）和实时时钟，用于烧录后的
@@ -128,13 +171,20 @@ host/.venv/bin/python -m unittest discover -s host/tests -v
 idf.py build
 ```
 
-连接并停止上位机后：
+`run_native_tests.sh` 覆盖 SN2 编解码、时钟文本格式化与 5×7 渲染，并逐字节
+校验固件字库与上位机 `host/vfd_display/font5x7.py` 一致。
+
+连接设备并烧录 USB 变体后（停止上位机）：
 
 ```sh
 host/.venv/bin/python host/check_device.py --port /dev/cu.usbmodem21201
 host/.venv/bin/python host/benchmark_device.py --port /dev/cu.usbmodem21201
 ```
 
+`pytest_state_notifier.py`（pytest-embedded）验证 SN2 协议交互，同样需要 USB
+变体固件与设备串口（`--embedded-services esp,serial`）。
+
 硬件性能验收为连续 10 分钟发送 30 FPS：平均提交至少 29 FPS，任意 1 秒窗口
-至少 24 FPS，CRC/解析错误为零。时钟、棋盘格、自检字符卡、亮度和断线约 2 秒
-清屏仍需实机目视确认。
+至少 24 FPS，CRC/解析错误为零。默认（时钟）固件上 SN2 端点未启用，串口测试
+必须使用 USB 变体。时钟、棋盘格、自检字符卡、亮度、WiFi 对时时间线和"停止
+上位机约 2 秒后恢复本机时钟"仍需实机目视确认。

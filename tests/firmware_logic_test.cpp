@@ -4,7 +4,10 @@
 #include <cstring>
 #include <vector>
 
+#include "clock_text.h"
+#include "font5x7.h"
 #include "sn2_protocol.h"
+#include "text_render.h"
 
 namespace {
 
@@ -101,5 +104,99 @@ int main()
     assert(result.error && result.error_code == sn2::ErrorCode::kFraming);
     result = feed(&decoder, hello.data(), hello.size(), &packet);
     assert(result.packet_ready);
+
+    // --- Clock glyph table and text rendering ---
+
+    const uint8_t glyph_zero[] = {0x3E, 0x51, 0x49, 0x45, 0x3E};
+    const uint8_t glyph_blank[] = {0x00, 0x00, 0x00, 0x00, 0x00};
+    assert(std::memcmp(app::font5x7::glyph('0'), glyph_zero,
+                       app::font5x7::kGlyphColumns) == 0);
+    assert(std::memcmp(app::font5x7::glyph(' '), glyph_blank,
+                       app::font5x7::kGlyphColumns) == 0);
+    assert(std::memcmp(app::font5x7::glyph(0x80), app::font5x7::glyph('?'),
+                       app::font5x7::kGlyphColumns) == 0);
+    assert(std::memcmp(app::font5x7::glyph('\n'), app::font5x7::glyph('?'),
+                       app::font5x7::kGlyphColumns) == 0);
+
+    // Expected columns produced by host/vfd_display's TextRenderer.
+    const uint8_t clock_12_34_56[app::kColumnCount] = {
+        0x00, 0x42, 0x7F, 0x40, 0x00, 0x42, 0x61, 0x51, 0x49, 0x46,
+        0x00, 0x36, 0x36, 0x00, 0x00, 0x21, 0x41, 0x45, 0x4B, 0x31,
+        0x18, 0x14, 0x12, 0x7F, 0x10, 0x00, 0x36, 0x36, 0x00, 0x00,
+        0x27, 0x45, 0x45, 0x45, 0x39, 0x3C, 0x4A, 0x49, 0x49, 0x30,
+    };
+    const uint8_t clock_placeholder[app::kColumnCount] = {
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x00, 0x36, 0x36, 0x00, 0x00, 0x08, 0x08, 0x08, 0x08, 0x08,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x00, 0x36, 0x36, 0x00, 0x00,
+        0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+    };
+
+    app::Frame rendered = {};
+    app::text::render("12:34:56", &rendered);
+    assert(std::memcmp(rendered.columns, clock_12_34_56, app::kColumnCount) == 0);
+    app::text::render("--:--:--", &rendered);
+    assert(std::memcmp(rendered.columns, clock_placeholder, app::kColumnCount) == 0);
+
+    // Lowercase folds to uppercase, unknown characters fall back to '?'.
+    app::Frame lower = {};
+    app::Frame upper = {};
+    app::text::render("ab", &lower);
+    app::text::render("AB", &upper);
+    assert(app::frame_equal(lower, upper));
+
+    const char unknown[] = {static_cast<char>(0x01), static_cast<char>(0x80), '\0'};
+    app::Frame fallback = {};
+    app::Frame question = {};
+    app::text::render(unknown, &fallback);
+    app::text::render("??", &question);
+    assert(app::frame_equal(fallback, question));
+
+    // Only the first eight characters fit; the rest is truncated.
+    app::Frame truncated = {};
+    app::Frame first_eight = {};
+    app::text::render("1234567890AB", &truncated);
+    app::text::render("12345678", &first_eight);
+    assert(app::frame_equal(truncated, first_eight));
+
+    // Empty input leaves the frame blank.
+    const uint8_t all_blank[app::kColumnCount] = {};
+    app::Frame empty = {};
+    app::text::render("", &empty);
+    assert(std::memcmp(empty.columns, all_blank, app::kColumnCount) == 0);
+    app::Frame null_text = {};
+    app::text::render(nullptr, &null_text);
+    assert(app::frame_equal(empty, null_text));
+
+    // --- Clock text formatting ---
+
+    char clock[app::clock_text::kLength + 1] = {};
+    struct tm local = {};
+    local.tm_hour = 9;
+    local.tm_min = 5;
+    local.tm_sec = 7;
+    app::clock_text::format(local, clock);
+    assert(std::strcmp(clock, "09:05:07") == 0);
+    local.tm_hour = 0;
+    local.tm_min = 0;
+    local.tm_sec = 0;
+    app::clock_text::format(local, clock);
+    assert(std::strcmp(clock, "00:00:00") == 0);
+    local.tm_hour = 23;
+    local.tm_min = 59;
+    local.tm_sec = 59;
+    app::clock_text::format(local, clock);
+    assert(std::strcmp(clock, "23:59:59") == 0);
+    app::clock_text::format_placeholder(clock);
+    assert(std::strcmp(clock, "--:--:--") == 0);
+
+    // Formatting plus rendering composes to the host-verified clock frame.
+    local.tm_hour = 12;
+    local.tm_min = 34;
+    local.tm_sec = 56;
+    app::clock_text::format(local, clock);
+    app::text::render(clock, &rendered);
+    assert(std::memcmp(rendered.columns, clock_12_34_56, app::kColumnCount) == 0);
+
     return 0;
 }

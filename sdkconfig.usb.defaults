@@ -1,0 +1,8 @@
+# Overlay for the legacy USB SN2 display build (used by pytest_state_notifier
+# and host/check_device.py). Build with:
+#
+#   idf.py -B build_usb -DSDKCONFIG="sdkconfig.usb" \
+#     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.usb.defaults" build
+#
+# The default firmware leaves USB as a power-only connection.
+CONFIG_STATE_NOTIFIER_USB_DISPLAY=y

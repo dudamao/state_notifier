@@ -1,0 +1,57 @@
+menu "State notifier"
+
+    config STATE_NOTIFIER_USB_DISPLAY
+        bool "Enable USB Serial/JTAG SN2 display endpoint"
+        default n
+        help
+            Install the USB Serial/JTAG driver and serve the SN2 protocol used
+            by the host/ scripts. When disabled (default) the USB connection is
+            power-only and the firmware runs as a self-syncing clock.
+
+    config STATE_NOTIFIER_WIFI_SSID
+        string "WiFi hotspot SSID (STA)"
+        default ""
+
+    config STATE_NOTIFIER_WIFI_PASSWORD
+        string "WiFi hotspot password (STA)"
+        default ""
+
+    config STATE_NOTIFIER_WIFI_CONNECT_TIMEOUT_S
+        int "WiFi connect + DHCP timeout (seconds)"
+        range 5 180
+        default 30
+        help
+            The ESP32-C5 scans both 2.4 GHz and 5 GHz on a cold connect, so
+            the first join can take 5-10 s even with the hotspot nearby.
+
+    config STATE_NOTIFIER_SNTP_SERVER
+        string "SNTP server host name or address"
+        default "ntp.aliyun.com"
+
+    config STATE_NOTIFIER_SNTP_TIMEOUT_S
+        int "SNTP sync timeout (seconds)"
+        range 5 120
+        default 15
+
+    config STATE_NOTIFIER_TIMEZONE
+        string "POSIX timezone string (TZ)"
+        default "CST-8"
+        help
+            UTC+8 is "CST-8" - the POSIX sign is inverted. UTC is "UTC0".
+
+    config STATE_NOTIFIER_RETRY_MIN_S
+        int "Retry backoff floor (seconds)"
+        range 1 600
+        default 5
+
+    config STATE_NOTIFIER_RETRY_MAX_S
+        int "Retry backoff ceiling (seconds)"
+        range 5 3600
+        default 60
+
+    config STATE_NOTIFIER_BRIGHTNESS
+        int "VFD brightness (0-255)"
+        range 0 255
+        default 255
+
+endmenu
