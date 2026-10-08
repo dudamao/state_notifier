@@ -1,0 +1,8 @@
+# Diagnostics overlay: route application logs to USB Serial/JTAG so the clock
+# can be debugged on a board with no UART adapter attached. Never ship this
+# configuration; the normal build keeps USB silent (power only).
+#
+#   idf.py -B build_debug -DSDKCONFIG="sdkconfig.debug" \
+#     -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.debug.defaults" build
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=n
